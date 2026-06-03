@@ -15,7 +15,7 @@ GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, G
 >
 > **Running inside an LXC (e.g. on Proxmox)?** Because LXC shares the host kernel, install the
 > NVIDIA driver on the **host** and the **same version** inside the LXC with `--no-kernel-module`.
-> Kernel 6.8.x needs driver **≥550.90** (or **≥535.183**); older releases fail to build. See
+> Kernel 6.8.x needs driver **≥550.90.07** (or **≥535.183**); older releases fail to build. See
 > [Proxmox and LXC GPU passthrough](#proxmox-and-lxc-gpu-passthrough) below for the exact steps.
 
 ---
@@ -61,12 +61,16 @@ kernel module skipped. Do **not** blacklist nouveau or bind the card to `vfio-pc
 *VM* passthrough and breaks LXC passthrough.
 
 **Driver version (kernel 6.8 is the constraint, not CUDA):** kernel `6.8.x` will not build older
-NVIDIA modules — use **550.x (≥550.90)** or **535 ≥535.183** (earlier 535 fails to compile). The
-image is CUDA 12.2 (floor 525.60.13, R535 validated) and both 535.183+ and 550.x are forward-
-compatible and support Pascal. **Recommended: latest 550.x via the `.run` installer**
-(robust 6.8 support, headroom for a CUDA 12.4 base later). Debian's packaged `nvidia-driver`
-(535.247) works too, but the `.run` lets you match host and LXC exactly and build against the PVE
-kernel headers.
+NVIDIA modules — use **550 ≥550.90.07** or **535 ≥535.183** (earlier releases fail to compile). The
+image is CUDA 12.2 (floor 525.60.13, R535 validated) and both 535.183+ and 550.90.07+ are forward-
+compatible and support Pascal. **Recommended: `550.90.07` or newer via the `.run` installer**
+(verified to build on `6.8.12-x-pve`; headroom for a CUDA 12.4 base later). Debian's packaged
+`nvidia-driver` (535.247) works too, but the `.run` lets you match host and LXC exactly and build
+against the PVE kernel headers.
+
+> ⚠️ **Do not use `550.54.14` (the initial 550 release) on kernel 6.8.** Its module build aborts
+> with `objtool: ... indirect jump found in MITIGATION_RETPOLINE build` → `Error 241` on `nv.o`.
+> Kernel 6.8 support first appears in **`550.90.07`** — use that or newer.
 
 ### 1. On the Proxmox host — kernel headers + driver
 
@@ -75,7 +79,7 @@ apt update
 apt install -y pve-headers-$(uname -r) dkms build-essential make
 ls "/usr/src/linux-headers-$(uname -r)" >/dev/null && echo "headers OK"
 
-# Download a 550.x (>=550.90) driver from NVIDIA, then:
+# Download a 550.x (>=550.90.07) driver from NVIDIA, then:
 chmod +x NVIDIA-Linux-x86_64-550.*.run
 ./NVIDIA-Linux-x86_64-550.*.run --dkms        # builds against pve-headers; rebuilds on kernel upgrade
 nvidia-smi                                     # must list the NVIDIA card on the host
