@@ -249,6 +249,10 @@ Allowing inbound peers materially improves reliability: without it you are a
 non-connectable peer and can only reach the connectable half of a swarm, which is the
 most common cause of stalls on sparse (legal/public-domain) torrents.
 
+**TCP vs UDP:** all peer data uses **TCP** (the engine has no uTP), so **TCP 6881 is the one that
+matters**. **UDP 6881** is optional — it only serves DHT peer *discovery*; publishing/forwarding it
+is harmless and can slightly improve discoverability, but it won't fix stalls the way TCP does.
+
 Two layers are required:
 
 1. **Publish the port on the container** (already in `compose-nvidia.yaml`):
@@ -256,18 +260,20 @@ Two layers are required:
    ```yaml
    ports:
      - "6881:6881/tcp"
+     - "6881:6881/udp"   # optional (DHT discovery only)
    ```
 
-2. **Forward it on your router** (WAN → the Docker host's LAN IP), TCP 6881, e.g. with nftables:
+2. **Forward it on your router** (WAN → the Docker host's LAN IP), TCP 6881 (UDP optional),
+   e.g. with nftables:
 
    ```
    # nftables example on the Linux router (adjust interface/IP)
    ip daddr <router-wan-ip> tcp dport 6881 dnat to <host-lan-ip>:6881
+   ip daddr <router-wan-ip> udp dport 6881 dnat to <host-lan-ip>:6881   # optional (DHT)
    ```
 
 > Keep the port identical end-to-end (6881 on both sides). The engine announces its own
-> listen port (6881) to peers and the DHT; remapping to a different external port leaves you
-> non-connectable. DHT uses a dynamic UDP port and does not need forwarding.
+> listen port (6881) to peers; remapping to a different external port leaves you non-connectable.
 
 ### Torrent tuning
 
