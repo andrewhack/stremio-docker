@@ -8,6 +8,31 @@ The Docker images in this repository bundle stremio-server, ffmpeg and web playe
 
 I built this to run Stremio on my Raspberry Pi 5 and couldn't find something that has both player and server but also the official image seemed too big but also lacks the Web Player and doesn't work out of the box if no HTTPS is configured.
 
+## ⚠️ Fork improvements (work in progress)
+
+This is a fork focused on **streaming reliability to low-power TVs**, hardening the
+self-hosted server's torrent and hardware-transcode paths. **Work is in progress — the
+NVIDIA/P400 path is written but not yet verified on hardware. Use with care and expect changes.**
+
+What this fork adds on top of upstream:
+
+- **Combined dual-GPU image** — the NVIDIA (`Dockerfile.nvidia`, NVENC/NVDEC) image also ships
+  the **Intel VAAPI driver**, so one container can use an Intel iGPU *and* an NVIDIA card. It
+  **auto-detects** at boot: NVIDIA present → `nvenc-linux` profile; otherwise → `vaapi` (so the
+  image is useful before any discrete GPU is installed).
+- **BitTorrent peer connectivity** — documents and publishes **TCP 6881** (incoming peers), the
+  single biggest reliability lever. See [Peer connectivity](#peer-connectivity-bittorrent-port).
+- **Torrent tuning via env** — exposes the engine's `bt*`/cache settings as environment variables,
+  defaulting to upstream values when unset. See [Torrent tuning](#torrent-tuning).
+- **Proxmox/LXC + Pascal notes** — host driver and GPU-passthrough guidance for a
+  Proxmox VE 8.4 (kernel 6.8) → LXC → Docker stack, including the Quadro P400. See
+  [`NVIDIA-GPU.md`](NVIDIA-GPU.md).
+
+**Status:** VAAPI + torrent paths are intended to be verifiable on an Intel iGPU host today; the
+P400 NVENC path and the Proxmox/LXC passthrough steps await hardware bring-up. Roadmap (not yet
+started): newer ffmpeg for GPU-side 10-bit scaling, per-stream dual-GPU routing, and an optional
+libtorrent backend.
+
 ## Features
 
 - **All-in-One:** Bundles Stremio server, web player, and ffmpeg in a single container.
