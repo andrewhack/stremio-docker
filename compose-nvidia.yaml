@@ -19,6 +19,14 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     ports:
       - "8085:8080"
+      # BitTorrent peer port (incoming connections). server.js listens on TCP 6881.
+      # Keep the same port on both sides; the engine announces its listen port to peers.
+      # Reachability from the internet also requires a WAN->LAN DNAT on the router
+      # (forward WAN tcp/6881 -> <host LAN IP> tcp/6881). Publishing here alone is LAN-only.
+      - "6881:6881/tcp"
+    devices:
+      # Intel iGPU (HD 530) for VAAPI. The NVIDIA P400 is provided via `runtime: nvidia` above.
+      - "/dev/dri:/dev/dri"
     volumes:
       - "./stremio-data:/root/.stremio-server"
     deploy:
