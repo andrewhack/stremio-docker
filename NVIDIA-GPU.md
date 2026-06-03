@@ -16,26 +16,28 @@ GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, G
 > **Host stack (this deployment):** Proxmox VE 8.4, kernel `6.8.12-23-pve`, LXC → Docker.
 > Because LXC shares the host kernel, install the NVIDIA driver on the **Proxmox host** and the
 > **same version** inside the LXC with `--no-kernel-module`. Kernel 6.8 needs driver
-> **≥550.90** (or **≥535.183**); older releases fail to build. See the deployment plan's
-> "Proxmox host + LXC GPU passthrough" task for the exact steps.
+> **≥550.90** (or **≥535.183**); older releases fail to build. See
+> [Proxmox VE 8.4 host and LXC GPU passthrough](#proxmox-ve-84-host-and-lxc-gpu-passthrough)
+> below for the exact steps.
 
 ---
 
 ## Table of contents
 
 1. [Prerequisites on the host](#prerequisites-on-the-host)
-2. [Architecture](#architecture)
-3. [Build](#build)
-4. [Deploy](#deploy)
-5. [Resource limits](#resource-limits)
-6. [GPU / transcoding configuration](#gpu--transcoding-configuration)
-7. [Runtime patches (server.js)](#runtime-patches-serverjs)
-8. [Rebuild / update](#rebuild--update)
-9. [What did NOT work (lessons learned)](#what-did-not-work-lessons-learned)
-10. [Applied fixes (summary)](#applied-fixes-summary)
-11. [Technical reference](#technical-reference)
-12. [CI and registry tags](#ci-and-registry-tags)
-13. [Current environment](#current-environment)
+2. [Proxmox VE 8.4 host and LXC GPU passthrough](#proxmox-ve-84-host-and-lxc-gpu-passthrough)
+3. [Architecture](#architecture)
+4. [Build](#build)
+5. [Deploy](#deploy)
+6. [Resource limits](#resource-limits)
+7. [GPU / transcoding configuration](#gpu--transcoding-configuration)
+8. [Runtime patches (server.js)](#runtime-patches-serverjs)
+9. [Rebuild / update](#rebuild--update)
+10. [What did NOT work (lessons learned)](#what-did-not-work-lessons-learned)
+11. [Applied fixes (summary)](#applied-fixes-summary)
+12. [Technical reference](#technical-reference)
+13. [CI and registry tags](#ci-and-registry-tags)
+14. [Current environment](#current-environment)
 
 ---
 
@@ -50,6 +52,95 @@ GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, G
 nvidia-smi
 docker info | grep -i "runtimes.*nvidia"
 ```
+
+## Proxmox VE 8.4 host and LXC GPU passthrough
+
+If the container runs inside an **LXC** on Proxmox (this deployment: PVE 8.4, kernel
+`6.8.12-23-pve`), the GPU is set up differently than on bare metal or in a VM. **LXC shares the
+host kernel**, so the kernel-mode driver lives on the **Proxmox host**, the device nodes are passed
+host → LXC → Docker, and a **matching userspace driver** is installed *inside* the LXC with the
+kernel module skipped. Do **not** blacklist nouveau or bind the card to `vfio-pci` — that is for
+*VM* passthrough and breaks LXC passthrough.
+
+**Driver version (kernel 6.8 is the constraint, not CUDA):** kernel `6.8.x` will not build older
+NVIDIA modules — use **550.x (≥550.90)** or **535 ≥535.183** (earlier 535 fails to compile). The
+image is CUDA 12.2 (floor 525.60.13, R535 validated) and both 535.183+ and 550.x are forward-
+compatible and support Pascal (the P400). **Recommended: latest 550.x via the `.run` installer**
+(robust 6.8 support, headroom for a CUDA 12.4 base later). Debian's packaged `nvidia-driver`
+(535.247) works too, but the `.run` lets you match host and LXC exactly and build against the PVE
+kernel headers.
+
+### 1. On the Proxmox host — kernel headers + driver
+
+```bash
+apt update
+apt install -y pve-headers-$(uname -r) dkms build-essential make
+ls /usr/src/linux-headers-6.8.12-23-pve >/dev/null && echo "headers OK"
+
+# Download a 550.x (>=550.90) driver from NVIDIA, then:
+chmod +x NVIDIA-Linux-x86_64-550.*.run
+./NVIDIA-Linux-x86_64-550.*.run --dkms        # builds against pve-headers; rebuilds on kernel upgrade
+nvidia-smi                                     # must list the Quadro P400 on the host
+```
+
+### 2. On the Proxmox host — find device majors and edit the LXC config
+
+```bash
+ls -l /dev/nvidia* /dev/dri/*
+cat /proc/devices | grep -Ei 'nvidia|drm'      # note the majors (typical: nvidia=195, uvm=234/235, drm=226)
+```
+
+Append to `/etc/pve/lxc/<CTID>.conf` (adjust majors to what you saw; assumes a **privileged** CT):
+
+```
+# --- NVIDIA P400 ---
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 235:* rwm
+lxc.cgroup2.devices.allow: c 509:* rwm
+lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
+# --- Intel HD 530 (VAAPI) ---
+lxc.cgroup2.devices.allow: c 226:* rwm
+lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
+```
+
+Enable Docker-in-LXC (Proxmox UI: CT → Options → Features → **nesting** + **keyctl**, or in the conf):
+
+```
+features: nesting=1,keyctl=1
+```
+
+Then `pct stop <CTID> && pct start <CTID>`.
+
+### 3. Inside the LXC — identical driver, no kernel module
+
+```bash
+# from the host: pct push <CTID> NVIDIA-Linux-x86_64-550.144.03.run /root/
+chmod +x /root/NVIDIA-Linux-x86_64-550.*.run
+/root/NVIDIA-Linux-x86_64-550.*.run --no-kernel-module   # MUST be the same version as the host
+nvidia-smi                                                # must list the P400 inside the LXC
+```
+
+### 4. Inside the LXC — container toolkit + verification
+
+```bash
+# add the NVIDIA container toolkit apt repo, then:
+apt install -y nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker
+systemctl restart docker
+
+# NVIDIA reachable from Docker:
+docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.2.2-base-ubuntu22.04 nvidia-smi
+# Intel reachable from Docker (no toolkit needed — just the device):
+ls -l /dev/dri                                            # card0 + renderD128 present in the LXC
+```
+
+`compose-nvidia.yaml` then reaches the P400 via `runtime: nvidia` and the HD 530 via the
+`/dev/dri` device mapping — both already configured in this repo.
 
 ## Architecture
 
