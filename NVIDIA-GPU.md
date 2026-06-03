@@ -6,6 +6,19 @@ applied solutions, and approaches that **did not work** — so the same mistakes
 
 GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, GPU reservations). The default **`compose.yaml`** in this repo targets the standard CPU image (`tsaridas/stremio-docker:latest`) and is unrelated to NVENC; always pass `-f compose-nvidia.yaml` for the commands in this guide.
 
+> **Applies to all Pascal NVENC cards.** This guide was developed on a GTX 1070
+> (GP104, Pascal, compute 6.1). The **Quadro P400** (GP107, Pascal, compute 6.1) is the
+> same NVENC/NVDEC generation and the same 10-bit constraint applies: HEVC 10-bit decodes
+> on NVDEC, but H.264 NVENC encode is 8-bit only, so the CPU-scale path here is required.
+> The P400 has **2 GB VRAM** (vs the 1070's 8 GB); a single 1080p transcode measured ~868 MiB,
+> so plan for ~1–2 concurrent transcodes, not more.
+>
+> **Host stack (this deployment):** Proxmox VE 8.4, kernel `6.8.12-23-pve`, LXC → Docker.
+> Because LXC shares the host kernel, install the NVIDIA driver on the **Proxmox host** and the
+> **same version** inside the LXC with `--no-kernel-module`. Kernel 6.8 needs driver
+> **≥550.90** (or **≥535.183**); older releases fail to build. See the deployment plan's
+> "Proxmox host + LXC GPU passthrough" task for the exact steps.
+
 ---
 
 ## Table of contents

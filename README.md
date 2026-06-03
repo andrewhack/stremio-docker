@@ -217,6 +217,52 @@ docker run -d \
   tsaridas/stremio-docker:latest
 ```
 
+### Peer connectivity (BitTorrent port)
+
+The streaming server accepts **incoming** BitTorrent peer connections on **TCP 6881**.
+Allowing inbound peers materially improves reliability: without it you are a
+non-connectable peer and can only reach the connectable half of a swarm, which is the
+most common cause of stalls on sparse (legal/public-domain) torrents.
+
+Two layers are required:
+
+1. **Publish the port on the container** (already in `compose-nvidia.yaml`):
+
+   ```yaml
+   ports:
+     - "6881:6881/tcp"
+   ```
+
+2. **Forward it on your router** (WAN → the Docker host's LAN IP), TCP 6881, e.g. with nftables:
+
+   ```
+   # nftables example on the Linux router (adjust interface/IP)
+   ip daddr <router-wan-ip> tcp dport 6881 dnat to <host-lan-ip>:6881
+   ```
+
+> Keep the port identical end-to-end (6881 on both sides). The engine announces its own
+> listen port (6881) to peers and the DHT; remapping to a different external port leaves you
+> non-connectable. DHT uses a dynamic UDP port and does not need forwarding.
+
+### Torrent tuning
+
+The streaming server's torrent engine exposes several levers. They are left at the
+server's own defaults unless you set the matching environment variable.
+
+| Env var | server-settings key | Default | Meaning |
+|---|---|---|---|
+| `BT_MAX_CONNECTIONS` | `btMaxConnections` | 55 | Max peer connections |
+| `BT_HANDSHAKE_TIMEOUT` | `btHandshakeTimeout` | 20000 | Handshake timeout (ms) |
+| `BT_REQUEST_TIMEOUT` | `btRequestTimeout` | 4000 | Piece request timeout (ms) |
+| `BT_DOWNLOAD_SPEED_SOFT_LIMIT` | `btDownloadSpeedSoftLimit` | 2621440 | Soft speed cap (bytes/s) |
+| `BT_DOWNLOAD_SPEED_HARD_LIMIT` | `btDownloadSpeedHardLimit` | 3670016 | Hard speed cap (bytes/s) |
+| `BT_MIN_PEERS_FOR_STABLE` | `btMinPeersForStable` | 5 | Peers considered "stable" |
+| `CACHE_SIZE` | `cacheSize` | 2147483648 | On-disk piece cache (bytes) |
+
+> On a fast LAN, raising `BT_DOWNLOAD_SPEED_HARD_LIMIT` (e.g. `10485760` = 10 MiB/s) lets
+> the buffer fill faster. The cache lives under the mounted volume; place that volume on an
+> SSD rather than enlarging `CACHE_SIZE`.
+
 ### Builds
 
 Builds are created for the following architectures:
