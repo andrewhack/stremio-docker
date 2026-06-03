@@ -1,0 +1,8 @@
+# Force LF for files that run inside the Linux container.
+# A CRLF shebang (#!/bin/sh\r) breaks the entrypoint at runtime, and CRLF in
+# Dockerfiles/compose can corrupt RUN/COPY behavior. Keep these LF on every platform.
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.conf      text eol=lf
