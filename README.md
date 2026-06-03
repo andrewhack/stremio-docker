@@ -8,6 +8,16 @@ The Docker images in this repository bundle stremio-server, ffmpeg and web playe
 
 I built this to run Stremio on my Raspberry Pi 5 and couldn't find something that has both player and server but also the official image seemed too big but also lacks the Web Player and doesn't work out of the box if no HTTPS is configured.
 
+> ## 🚧 Work in progress
+>
+> This fork is adding **streaming-reliability improvements** — a combined Intel-VAAPI +
+> NVIDIA-NVENC image with boot-time GPU autodetect, a published BitTorrent peer port (TCP 6881),
+> torrent-tuning env vars, and Proxmox/LXC + Quadro P400 deployment notes.
+>
+> That work lives on the [`phase1-improvements`](../../tree/phase1-improvements) branch and is
+> **not yet verified on hardware**. This `main` branch stays on the stable baseline; the
+> improvements will be fast-forwarded here once they build and run green on a real GPU host.
+
 ## Features
 
 - **All-in-One:** Bundles Stremio server, web player, and ffmpeg in a single container.
