@@ -101,6 +101,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
   libgnutls30 libvpx7 libtheora0 libdrm2 \
   libbluray2 libzimg2 libdav1d5 libaom3 \
   libxvidcore4 libfdk-aac2 libwebp7 libwebpmux3 libva2 libva-drm2 \
+  intel-media-va-driver-non-free i965-va-driver vainfo \
   && rm -rf /var/lib/apt/lists/*
 
 # Match Alpine nginx directory structure used by stremio scripts
@@ -145,9 +146,21 @@ ENV CERT_FILE=
 ENV SERVER_URL=
 ENV AUTO_SERVER_URL=0
 
+# Torrent tuning (optional; unset = stock server.js defaults)
+ENV BT_MAX_CONNECTIONS=
+ENV BT_HANDSHAKE_TIMEOUT=
+ENV BT_REQUEST_TIMEOUT=
+ENV BT_DOWNLOAD_SPEED_SOFT_LIMIT=
+ENV BT_DOWNLOAD_SPEED_HARD_LIMIT=
+ENV BT_MIN_PEERS_FOR_STABLE=
+ENV CACHE_SIZE=
+
 # NVIDIA env vars for container toolkit
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+# Intel VAAPI: select the iHD (Gen8+) driver for /dev/dri
+ENV LIBVA_DRIVER_NAME=iHD
 
 # Copy ffmpeg built with NVENC
 COPY --from=ffmpeg /usr/bin/ffmpeg /usr/bin/ffprobe /usr/bin/
