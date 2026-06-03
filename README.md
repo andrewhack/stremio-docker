@@ -12,7 +12,7 @@ I built this to run Stremio on my Raspberry Pi 5 and couldn't find something tha
 
 This is a fork focused on **streaming reliability to low-power TVs**, hardening the
 self-hosted server's torrent and hardware-transcode paths. **Work is in progress — the
-NVIDIA/P400 path is written but not yet verified on hardware. Use with care and expect changes.**
+NVIDIA NVENC path is written but not yet verified on hardware. Use with care and expect changes.**
 
 What this fork adds on top of upstream:
 
@@ -25,11 +25,11 @@ What this fork adds on top of upstream:
 - **Torrent tuning via env** — exposes the engine's `bt*`/cache settings as environment variables,
   defaulting to upstream values when unset. See [Torrent tuning](#torrent-tuning).
 - **Proxmox/LXC + Pascal notes** — host driver and GPU-passthrough guidance for a
-  Proxmox VE 8.4 (kernel 6.8) → LXC → Docker stack, including the Quadro P400. See
+  Proxmox → LXC → Docker stack (kernel 6.8.x driver caveats included). See
   [`NVIDIA-GPU.md`](NVIDIA-GPU.md).
 
 **Status:** VAAPI + torrent paths are intended to be verifiable on an Intel iGPU host today; the
-P400 NVENC path and the Proxmox/LXC passthrough steps await hardware bring-up. Roadmap (not yet
+NVENC path and the Proxmox/LXC passthrough steps await hardware bring-up. Roadmap (not yet
 started): newer ffmpeg for GPU-side 10-bit scaling, per-stream dual-GPU routing, and an optional
 libtorrent backend.
 
