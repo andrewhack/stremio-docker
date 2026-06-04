@@ -73,10 +73,11 @@ elif [ -n "${CERT_FILE}" ]; then
         node certificate.js --action load --pem-path "/srv/stremio-server/certificates.pem" --domain "${DOMAIN}" --json-path "${CONFIG_FOLDER}httpsCert.json"
     fi
 fi
-# Force NVENC hw accel: patch server.js to skip the broken auto-test
-# The auto-test always fails (0.2s sample + concurrency race) and disables hw accel.
-# We disable the test and set correct NVENC settings directly.
-if [ -f /usr/bin/nvidia-smi ] 2>/dev/null; then
+# Hardware-accel autodetect. Use the NVENC path only when an NVIDIA GPU is actually present
+# (nvidia-smi lists a device) — NOT merely when the nvidia-smi binary exists, which the nvidia
+# runtime injects even on a host whose driver is installed but has no card. Otherwise fall back
+# to VAAPI. server.js also runs a broken 0.2s auto-test that we neutralize via the !1->!0 patch.
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
     SETTINGS="${CONFIG_FOLDER}server-settings.json"
 
     # Patch server.js: prevent auto-test from disabling hw accel
