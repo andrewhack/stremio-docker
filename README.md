@@ -8,11 +8,12 @@ The Docker images in this repository bundle stremio-server, ffmpeg and web playe
 
 I built this to run Stremio on my Raspberry Pi 5 and couldn't find something that has both player and server but also the official image seemed too big but also lacks the Web Player and doesn't work out of the box if no HTTPS is configured.
 
-## ⚠️ Fork improvements (work in progress)
+## Fork improvements
 
 This is a fork focused on **streaming reliability to low-power TVs**, hardening the
-self-hosted server's torrent and hardware-transcode paths. **Work is in progress — the
-NVIDIA NVENC path is written but not yet verified on hardware. Use with care and expect changes.**
+self-hosted server's torrent and hardware-transcode paths. **Validated on hardware** — a
+Tizen TV direct-plays 4K HEVC through the server, NVENC and VAAPI both pass Stremio's
+hardware-accel profiler, and the torrent download-tuning is confirmed.
 
 What this fork adds on top of upstream:
 
@@ -28,10 +29,10 @@ What this fork adds on top of upstream:
   Proxmox → LXC → Docker stack (kernel 6.8.x driver caveats included). See
   [`NVIDIA-GPU.md`](NVIDIA-GPU.md).
 
-**Status:** VAAPI + torrent paths are intended to be verifiable on an Intel iGPU host today; the
-NVENC path and the Proxmox/LXC passthrough steps await hardware bring-up. Roadmap (not yet
-started): newer ffmpeg for GPU-side 10-bit scaling, per-stream dual-GPU routing, and an optional
-libtorrent backend.
+**Status:** validated on a Proxmox/LXC host with an Intel iGPU + NVIDIA Pascal GPU. Note that on
+HEVC-capable clients (modern TVs) most content **direct-plays** — the GPU is intentionally idle
+unless a transcode is actually required. Roadmap (not yet started): newer ffmpeg for GPU-side
+10-bit scaling, per-stream dual-GPU routing, and an optional libtorrent backend.
 
 ## Features
 
