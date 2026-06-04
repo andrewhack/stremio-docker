@@ -6,37 +6,159 @@ applied solutions, and approaches that **did not work** — so the same mistakes
 
 GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, GPU reservations). The default **`compose.yaml`** in this repo targets the standard CPU image (`tsaridas/stremio-docker:latest`) and is unrelated to NVENC; always pass `-f compose-nvidia.yaml` for the commands in this guide.
 
+> **Applies to all Pascal NVENC cards.** This guide was developed on a GTX 1070
+> (GP104, Pascal, compute 6.1). Other Pascal cards (e.g. the Quadro P400, GP107) are the
+> same NVENC/NVDEC generation and the same 10-bit constraint applies: HEVC 10-bit decodes
+> on NVDEC, but H.264 NVENC encode is 8-bit only, so the CPU-scale path here is required.
+> On low-VRAM Pascal cards (e.g. a 2 GB card) plan for ~1–2 concurrent transcodes — a single
+> 1080p transcode measured ~868 MiB.
+>
+> **Running inside an LXC (e.g. on Proxmox)?** Because LXC shares the host kernel, install the
+> NVIDIA driver on the **host** and the **same version** inside the LXC with `--no-kernel-module`.
+> Kernel 6.8.x needs driver **≥550.90.07** (or **≥535.183**); older releases fail to build. See
+> [Proxmox and LXC GPU passthrough](#proxmox-and-lxc-gpu-passthrough) below for the exact steps.
+
 ---
 
 ## Table of contents
 
 1. [Prerequisites on the host](#prerequisites-on-the-host)
-2. [Architecture](#architecture)
-3. [Build](#build)
-4. [Deploy](#deploy)
-5. [Resource limits](#resource-limits)
-6. [GPU / transcoding configuration](#gpu--transcoding-configuration)
-7. [Runtime patches (server.js)](#runtime-patches-serverjs)
-8. [Rebuild / update](#rebuild--update)
-9. [What did NOT work (lessons learned)](#what-did-not-work-lessons-learned)
-10. [Applied fixes (summary)](#applied-fixes-summary)
-11. [Technical reference](#technical-reference)
-12. [CI and registry tags](#ci-and-registry-tags)
-13. [Current environment](#current-environment)
+2. [Proxmox and LXC GPU passthrough](#proxmox-and-lxc-gpu-passthrough)
+3. [Architecture](#architecture)
+4. [Build](#build)
+5. [Deploy](#deploy)
+6. [Resource limits](#resource-limits)
+7. [GPU / transcoding configuration](#gpu--transcoding-configuration)
+8. [Runtime patches (server.js)](#runtime-patches-serverjs)
+9. [Rebuild / update](#rebuild--update)
+10. [What did NOT work (lessons learned)](#what-did-not-work-lessons-learned)
+11. [Applied fixes (summary)](#applied-fixes-summary)
+12. [Technical reference](#technical-reference)
+13. [CI and registry tags](#ci-and-registry-tags)
+14. [Reference environment](#reference-environment)
 
 ---
 
 ## Prerequisites on the host
 
-- NVIDIA driver >= 535 (`nvidia-smi` must work)
+For the **NVIDIA (NVENC) path**:
+
+- NVIDIA driver new enough for your kernel **and** for CUDA 12.2 (floor 525.60.13). On
+  **kernel 6.8** use **≥550.90.07** or **≥535.183** — see
+  [Proxmox and LXC GPU passthrough](#proxmox-and-lxc-gpu-passthrough). `nvidia-smi` must work.
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
 - Docker with the `nvidia` runtime configured (`docker info | grep nvidia`)
+
+> The NVIDIA stack is **optional**. The same image also runs **VAAPI-only** (Intel/AMD iGPU) with
+> just `--device /dev/dri` and no NVIDIA driver — the entrypoint auto-detects which to use (see
+> [Runtime patches](#runtime-patches-serverjs)).
 
 ```bash
 # Verify prerequisites
 nvidia-smi
 docker info | grep -i "runtimes.*nvidia"
 ```
+
+## Proxmox and LXC GPU passthrough
+
+If the container runs inside an **LXC** on Proxmox, the GPU is set up differently than on bare
+metal or in a VM. **LXC shares the host kernel**, so the kernel-mode driver lives on the
+**Proxmox host**, the device nodes are passed
+host → LXC → Docker, and a **matching userspace driver** is installed *inside* the LXC with the
+kernel module skipped. Do **not** blacklist nouveau or bind the card to `vfio-pci` — that is for
+*VM* passthrough and breaks LXC passthrough.
+
+**Driver version (kernel 6.8 is the constraint, not CUDA):** kernel `6.8.x` will not build older
+NVIDIA modules — use **550 ≥550.90.07** or **535 ≥535.183** (earlier releases fail to compile). The
+image is CUDA 12.2 (floor 525.60.13, R535 validated) and both 535.183+ and 550.90.07+ are forward-
+compatible and support Pascal. **Recommended: `550.90.07` or newer via the `.run` installer**
+(verified to build on `6.8.12-x-pve`; headroom for a CUDA 12.4 base later). Debian's packaged
+`nvidia-driver` (535.247) works too, but the `.run` lets you match host and LXC exactly and build
+against the PVE kernel headers.
+
+> ⚠️ **Do not use `550.54.14` (the initial 550 release) on kernel 6.8.** Its module build aborts
+> with `objtool: ... indirect jump found in MITIGATION_RETPOLINE build` → `Error 241` on `nv.o`.
+> Kernel 6.8 support first appears in **`550.90.07`** — use that or newer.
+
+### 1. On the Proxmox host — kernel headers + driver
+
+```bash
+apt update
+apt install -y pve-headers-$(uname -r) dkms build-essential make
+ls "/usr/src/linux-headers-$(uname -r)" >/dev/null && echo "headers OK"
+
+# Download a 550.x (>=550.90.07) driver from NVIDIA, then:
+chmod +x NVIDIA-Linux-x86_64-550.*.run
+./NVIDIA-Linux-x86_64-550.*.run --dkms        # builds against pve-headers; rebuilds on kernel upgrade
+nvidia-smi                                     # must list the NVIDIA card on the host
+```
+
+### 2. On the Proxmox host — find device majors and edit the LXC config
+
+```bash
+ls -l /dev/nvidia* /dev/dri/*
+cat /proc/devices | grep -Ei 'nvidia|drm'      # note the majors (typical: nvidia=195, uvm=234/235, drm=226)
+```
+
+Append to `/etc/pve/lxc/<CTID>.conf` (adjust majors to what you saw; assumes a **privileged** CT):
+
+```
+# --- NVIDIA GPU ---
+lxc.cgroup2.devices.allow: c 195:* rwm
+lxc.cgroup2.devices.allow: c 234:* rwm
+lxc.cgroup2.devices.allow: c 235:* rwm
+lxc.cgroup2.devices.allow: c 509:* rwm
+lxc.mount.entry: /dev/nvidia0 dev/nvidia0 none bind,optional,create=file
+lxc.mount.entry: /dev/nvidiactl dev/nvidiactl none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm dev/nvidia-uvm none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-uvm-tools dev/nvidia-uvm-tools none bind,optional,create=file
+lxc.mount.entry: /dev/nvidia-caps dev/nvidia-caps none bind,optional,create=dir
+# --- Intel iGPU (VAAPI) ---
+lxc.cgroup2.devices.allow: c 226:* rwm
+lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
+```
+
+Enable Docker-in-LXC (Proxmox UI: CT → Options → Features → **nesting** + **keyctl**, or in the conf):
+
+```
+features: nesting=1,keyctl=1
+```
+
+Then `pct stop <CTID> && pct start <CTID>`.
+
+### 3. Inside the LXC — identical driver, no kernel module
+
+```bash
+# from the host: pct push <CTID> NVIDIA-Linux-x86_64-550.144.03.run /root/
+chmod +x /root/NVIDIA-Linux-x86_64-550.*.run
+/root/NVIDIA-Linux-x86_64-550.*.run --no-kernel-module   # MUST be the same version as the host
+nvidia-smi                                                # must list the GPU inside the LXC
+```
+
+### 4. Inside the LXC — container toolkit + verification
+
+```bash
+# The package is NOT in the Debian/Ubuntu repos — add NVIDIA's repo first
+# (otherwise apt fails with "Unable to locate package nvidia-container-toolkit"):
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt update
+
+apt install -y nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker
+systemctl restart docker
+
+# NVIDIA reachable from Docker:
+docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.2.2-base-ubuntu22.04 nvidia-smi
+# Intel reachable from Docker (no toolkit needed — just the device):
+ls -l /dev/dri                                            # card0 + renderD128 present in the LXC
+```
+
+`compose-nvidia.yaml` then reaches the NVIDIA GPU via `runtime: nvidia` and the Intel iGPU via the
+`/dev/dri` device mapping — both already configured in this repo.
 
 ## Architecture
 
@@ -59,6 +181,9 @@ docker info | grep -i "runtimes.*nvidia"
 │      └── stremio-web-service-run.sh (entrypoint)    │
 └─────────────────────────────────────────────────────┘
 ```
+
+> The final image also bundles the Intel **iHD VAAPI** driver, so a single image serves both the
+> NVENC path (NVIDIA) and the VAAPI path (Intel/AMD iGPU).
 
 ### Transcoding pipeline (after patches)
 
@@ -96,6 +221,11 @@ docker compose -f compose-nvidia.yaml build --no-cache
 docker compose -f compose-nvidia.yaml build --build-arg BRANCH=release
 ```
 
+> **`BRANCH` selects the `Stremio/stremio-web` (player) branch only** — `development` (default)
+> or `release`. It does **not** select *this* repo's branch: the Dockerfile, entrypoint, and
+> compose come from whatever you have **checked out** (the build context). There is no build-arg
+> for the repo version — run `git checkout <branch>` before building.
+
 **Build time:** ~5–10 min (ffmpeg with CUDA is the slowest part).
 
 ### CI and registry tags
@@ -114,7 +244,7 @@ GitHub Actions builds **`Dockerfile.nvidia`** in a separate job **`build-nvidia`
 
 Rationale: one image name (`stremio-docker`), discoverable **`-nvidia`** suffix, no second Docker Hub repository to maintain, and manifest lists can grow to more architectures later without renaming.
 
-Local compose uses `image: stremio-docker:nvidia` when you build yourself; to run a prebuilt hub image instead, use **`nightly-nvidia`** for bleeding edge or **`latest-nvidia`** once you want the last released NVIDIA variant (and remove or keep the `build:` block as you prefer).
+Local compose uses `image: stremio-docker-dual:latest` when you build yourself; to run a prebuilt hub image instead, use **`nightly-nvidia`** for bleeding edge or **`latest-nvidia`** once you want the last released NVIDIA variant (and remove or keep the `build:` block as you prefer).
 
 ### Resolved build issues
 
@@ -142,7 +272,41 @@ docker compose -f compose-nvidia.yaml restart
 docker compose -f compose-nvidia.yaml down
 ```
 
-**Access:** `https://stremio.media.lan/` (host port 8085 → container 8080; replace with your own DNS or IP)
+**Access:** `https://<your-host-or-domain>:8080/` (host port 8080 → container 8080).
+
+### Deploy with `docker run` (no compose)
+
+Equivalent to the compose file, for hosts that don't use compose. **`--gpus all` (or `--runtime=nvidia`) is mandatory** — the `NVIDIA_*` env vars alone do nothing without it (the GPU/CUDA libraries are injected by the runtime).
+
+```bash
+docker run -d --name stremio --restart unless-stopped \
+  --gpus all \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -e NO_CORS=1 \
+  -e AUTO_SERVER_URL=1 \
+  -e DOMAIN=your.domain.tld \
+  -e CERT_FILE=certificates.pem \
+  --device /dev/dri:/dev/dri \
+  -v "$PWD/stremio-data:/root/.stremio-server" \
+  -p 8080:8080 \
+  -p 6881:6881/tcp -p 6881:6881/udp \
+  -p 11470:11470 -p 12470:12470 \
+  stremio-docker-dual:latest
+```
+
+Notes:
+- **GPU:** `--gpus all` requires the NVIDIA Container Toolkit on the host. Omit it (and the `NVIDIA_*` env) for a VAAPI-only / CPU host; the entrypoint then auto-selects VAAPI.
+- **HTTPS:** set `DOMAIN` to your domain and place your TLS cert at `./stremio-data/certificates.pem`. For plain HTTP on the LAN, drop `DOMAIN`/`CERT_FILE` and reach it at `http://<host>:8080`. For the `*.stremio.rocks` auto-cert flow, use `-e IPADDRESS=<your-ip>` instead (see the main README).
+- **Intel VAAPI:** `--device /dev/dri:/dev/dri` exposes the iGPU.
+- **Optional torrent tuning** (unset = stock defaults): add e.g. `-e BT_DOWNLOAD_SPEED_HARD_LIMIT=52428800 -e BT_DOWNLOAD_SPEED_SOFT_LIMIT=12582912 -e BT_MAX_CONNECTIONS=200`.
+- **6881** is the BitTorrent peer port (forward it WAN→host on your router for inbound peers); **11470/12470** are the streaming-server HTTP/HTTPS endpoints (loopback-bound in-container — see the ports note in `compose-nvidia.yaml`).
+
+```bash
+docker logs -f stremio        # view logs
+docker restart stremio        # re-applies the server.js patches automatically
+docker rm -f stremio          # stop & remove
+```
 
 ## Resource limits
 
@@ -156,11 +320,13 @@ deploy:
       memory: 256M        # Guaranteed minimum (idle ~200MB: node + nginx)
       devices:
         - driver: nvidia
-          count: 1         # 1 GPU (GTX 1070 8GB)
+          count: 1         # 1 GPU
           capabilities: [gpu, video, compute]
 ```
 
-### Measured usage during active transcoding
+### Measured usage during active transcoding (reference figures)
+
+> Measured on a reference Pascal GTX 1070 setup; your numbers vary with card, resolution, and concurrency.
 
 | Process | CPU | RAM (RSS) | GPU |
 |----------|-----|-----------|-----|
@@ -184,7 +350,7 @@ docker compose -f compose-nvidia.yaml up -d   # applies without rebuild
 ### Quick checks
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # GPU visible?
 docker exec $CONTAINER nvidia-smi
@@ -201,7 +367,7 @@ docker exec $CONTAINER sh -c 'ldd /usr/bin/ffmpeg | grep "not found"'
 ### Check whether transcoding uses the GPU
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # ffmpeg processes inside the container
 docker exec $CONTAINER ps aux | grep ffmpeg
@@ -240,6 +406,9 @@ Stremio stores transcoding settings in `/root/.stremio-server/server-settings.js
 
 > **Note:** The GPU is only used when transcoding happens (e.g. HEVC→H264, resolution change).
 > If the player supports the codec natively, the stream goes straight through without ffmpeg.
+>
+> On a host without an NVIDIA GPU the same fields apply but `transcodeProfile` is `"vaapi"`
+> (and `allTranscodeProfiles` is `["vaapi"]`), set automatically by the autodetect above.
 
 ## Runtime patches (server.js)
 
@@ -248,6 +417,18 @@ The `stremio-web-service-run.sh` file (container entrypoint) patches Stremio's `
 webpack bundle and we cannot change Stremio's source directly.
 
 Patches are re-applied automatically on every container restart/recreate.
+
+### Hardware autodetect (NVENC vs VAAPI)
+
+The entrypoint picks the transcode profile by what is present at boot:
+
+- **`nvidia-smi` present** → applies the NVENC patches below and sets `transcodeProfile: "nvenc-linux"`.
+- **no `nvidia-smi`** → neutralizes the same auto-test and sets `transcodeProfile: "vaapi"` (Intel/AMD).
+
+So the same image is correct whether or not an NVIDIA card is installed; on a VAAPI-only host you
+just pass `--device /dev/dri` and skip the NVIDIA runtime. The entrypoint additionally injects
+optional torrent/cache tuning (`BT_*` / `CACHE_SIZE` env → `server-settings.json`) — see the
+README "Torrent tuning" section.
 
 ### Patch 1: Neutralize the hardware-acceleration auto-test
 
@@ -371,10 +552,10 @@ sleep 10
 docker logs stremio-docker-stremio-1 2>&1 | grep NVENC
 
 # 6. Confirm GPU visible
-docker exec $(docker ps --filter "ancestor=stremio-docker:nvidia" -q) nvidia-smi
+docker exec $(docker ps --filter "ancestor=stremio-docker-dual:latest" -q) nvidia-smi
 
 # 7. Check settings
-docker exec $(docker ps --filter "ancestor=stremio-docker:nvidia" -q) \
+docker exec $(docker ps --filter "ancestor=stremio-docker-dual:latest" -q) \
   grep -E 'transcodeHardware|transcodeProfile' /root/.stremio-server/server-settings.json
 ```
 
@@ -571,7 +752,7 @@ These offsets are approximate and may change between stremio-web versions:
 ### Useful diagnostic commands
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # All ffmpeg processes and their arguments
 docker exec $CONTAINER sh -c 'for pid in $(pgrep ffmpeg); do
@@ -595,32 +776,15 @@ curl -s http://localhost:11470/settings 2>/dev/null | python3 -m json.tool | gre
 watch -n1 "docker exec $CONTAINER nvidia-smi --query-gpu=utilization.gpu,utilization.encoder,utilization.decoder,memory.used --format=csv,noheader"
 ```
 
-## Current environment
+## Reference environment
 
-- **Host:** Linux, 4 CPUs, 15GB RAM
-- **GPU:** NVIDIA GeForce GTX 1070 (8GB VRAM, Pascal, compute 6.1)
-- **Driver:** 535.288.01 / CUDA 12.2
-- **Docker runtime:** nvidia (nvidia-container-toolkit)
-- **Volume:** `/mnt/lvm1-storage/.stremio-server`
-- **Access:** `https://stremio.media.lan/` (port 8085; example URL — match `SERVER_URL` in `compose-nvidia.yaml`)
-- **Git branch:** `test/gpu-nvidia`
+The NVENC path in this guide was validated on a **Pascal GTX 1070** (8 GB, compute 6.1) using the
+`nvidia` Docker runtime (nvidia-container-toolkit) with CUDA 12.2. The same approach applies to
+other Pascal cards (e.g. the Quadro P400) — see the note at the top of this document for the
+10-bit and low-VRAM caveats.
 
-### Current container limits
-
-| Resource | Limit | Reservation | Rationale |
-|---------|--------|-------------|-----------|
-| CPU | 1.5 cores | — | NVENC offload (measured peak: 138%) |
-| RAM | 1536 MB | 256 MB | Measured peak: 1.35 GB |
-| GPU | 1× GTX 1070 | — | Decode + encode |
-
-### Commits (branch test/gpu-nvidia)
-
-```
-44f6233 perf: reduce container limits — NVENC offloads to GPU
-f869494 docs: update NVIDIA-GPU.md with 10-bit compat and auto-patch info
-2ba78fd fix: patch nvenc-linux profile for 10-bit compat (Pascal GPUs)
-a8d74c5 fix: neutralize hw accel auto-test by patching saveSettings calls
-b6db603 fix: patch server.js to skip broken hw accel auto-test
-2ecfd3e fix: extend NVENC watcher to 360s (auto-test takes ~2min)
-e321aca feat: NVIDIA GPU hardware acceleration (NVENC/NVDEC/CUVID)
-```
+- **GPU:** any NVENC-capable card; Pascal needs the CPU-scale path for 10-bit input (see Patch 2).
+- **Driver:** see [Prerequisites](#prerequisites-on-the-host) — on kernel 6.8 use ≥550.90.07 / ≥535.183.
+- **Container limits:** see [Resource limits](#resource-limits) (1.5 CPU / 1.5 GB are sane defaults;
+  tune for your card and concurrency).
+- **Volume / access:** set the data volume and `SERVER_URL` in `compose-nvidia.yaml` to your host.

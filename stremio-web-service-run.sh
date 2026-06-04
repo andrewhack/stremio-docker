@@ -26,6 +26,27 @@ else
     echo "No HTTP basic authentication will be used."
 fi
 
+# Apply optional torrent/cache tuning from env to server-settings.json.
+# Each key is only written when its env var is set → unset means upstream default.
+apply_bt_settings() {
+    SETTINGS="${CONFIG_FOLDER}server-settings.json"
+    [ -f "$SETTINGS" ] || return 0
+    _set_num() { # _set_num <jsonKey> <value>
+        case "$2" in ''|*[!0-9]*) return 0 ;; esac   # only positive integers
+        if grep -q "\"$1\"" "$SETTINGS"; then
+            sed -i "s/\"$1\": *[0-9]\+/\"$1\": $2/" "$SETTINGS"
+            echo "TORRENT: set $1=$2"
+        fi
+    }
+    _set_num btMaxConnections         "${BT_MAX_CONNECTIONS}"
+    _set_num btHandshakeTimeout       "${BT_HANDSHAKE_TIMEOUT}"
+    _set_num btRequestTimeout         "${BT_REQUEST_TIMEOUT}"
+    _set_num btDownloadSpeedSoftLimit "${BT_DOWNLOAD_SPEED_SOFT_LIMIT}"
+    _set_num btDownloadSpeedHardLimit "${BT_DOWNLOAD_SPEED_HARD_LIMIT}"
+    _set_num btMinPeersForStable      "${BT_MIN_PEERS_FOR_STABLE}"
+    _set_num cacheSize                "${CACHE_SIZE}"
+}
+
 start_http_server() {
     if [ -n "${WEBUI_INTERNAL_PORT}" ] && [ "${WEBUI_INTERNAL_PORT}" -ge 1 ] && [ "${WEBUI_INTERNAL_PORT}" -le 65535 ]; then
         sed -i "s/8080/"${WEBUI_INTERNAL_PORT}"/g" /etc/nginx/http.d/default.conf
@@ -52,10 +73,11 @@ elif [ -n "${CERT_FILE}" ]; then
         node certificate.js --action load --pem-path "/srv/stremio-server/certificates.pem" --domain "${DOMAIN}" --json-path "${CONFIG_FOLDER}httpsCert.json"
     fi
 fi
-# Force NVENC hw accel: patch server.js to skip the broken auto-test
-# The auto-test always fails (0.2s sample + concurrency race) and disables hw accel.
-# We disable the test and set correct NVENC settings directly.
-if [ -f /usr/bin/nvidia-smi ] 2>/dev/null; then
+# Hardware-accel autodetect. Use the NVENC path only when an NVIDIA GPU is actually present
+# (nvidia-smi lists a device) — NOT merely when the nvidia-smi binary exists, which the nvidia
+# runtime injects even on a host whose driver is installed but has no card. Otherwise fall back
+# to VAAPI. server.js also runs a broken 0.2s auto-test that we neutralize via the !1->!0 patch.
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
     SETTINGS="${CONFIG_FOLDER}server-settings.json"
 
     # Patch server.js: prevent auto-test from disabling hw accel
@@ -84,7 +106,25 @@ if [ -f /usr/bin/nvidia-smi ] 2>/dev/null; then
             "$SETTINGS"
         echo "NVENC: settings configured (transcodeHardwareAccel: true, profile: nvenc-linux)"
     fi
+else
+    # No NVIDIA GPU detected → default to Intel/AMD VAAPI (HD 530 etc.)
+    SETTINGS="${CONFIG_FOLDER}server-settings.json"
+
+    # Same broken-auto-test fix as the NVENC path
+    sed -i 's/transcodeHardwareAccel: !1/transcodeHardwareAccel: !0/g' server.js
+    echo "VAAPI: patched server.js (auto-test neutralized)"
+
+    if [ -f "$SETTINGS" ]; then
+        sed -i \
+            -e 's/"transcodeHardwareAccel": false/"transcodeHardwareAccel": true/' \
+            -e 's/"transcodeProfile": null/"transcodeProfile": "vaapi"/' \
+            -e 's/"allTranscodeProfiles": \[\]/"allTranscodeProfiles": ["vaapi"]/' \
+            "$SETTINGS"
+        echo "VAAPI: settings configured (transcodeHardwareAccel: true, profile: vaapi)"
+    fi
 fi
+
+apply_bt_settings
 
 node server.js &
 SERVER_PID=$!

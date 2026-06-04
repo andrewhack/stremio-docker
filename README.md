@@ -8,15 +8,30 @@ The Docker images in this repository bundle stremio-server, ffmpeg and web playe
 
 I built this to run Stremio on my Raspberry Pi 5 and couldn't find something that has both player and server but also the official image seemed too big but also lacks the Web Player and doesn't work out of the box if no HTTPS is configured.
 
-> ## 🚧 Work in progress
->
-> This fork is adding **streaming-reliability improvements** — a combined Intel-VAAPI +
-> NVIDIA-NVENC image with boot-time GPU autodetect, a published BitTorrent peer port (TCP 6881),
-> torrent-tuning env vars, and Proxmox/LXC GPU-passthrough deployment notes.
->
-> That work lives on the [`phase1-improvements`](../../tree/phase1-improvements) branch and is
-> **not yet verified on hardware**. This `main` branch stays on the stable baseline; the
-> improvements will be fast-forwarded here once they build and run green on a real GPU host.
+## ⚠️ Fork improvements (work in progress)
+
+This is a fork focused on **streaming reliability to low-power TVs**, hardening the
+self-hosted server's torrent and hardware-transcode paths. **Work is in progress — the
+NVIDIA NVENC path is written but not yet verified on hardware. Use with care and expect changes.**
+
+What this fork adds on top of upstream:
+
+- **Combined dual-GPU image** — the NVIDIA (`Dockerfile.nvidia`, NVENC/NVDEC) image also ships
+  the **Intel VAAPI driver**, so one container can use an Intel iGPU *and* an NVIDIA card. It
+  **auto-detects** at boot: NVIDIA present → `nvenc-linux` profile; otherwise → `vaapi` (so the
+  image is useful before any discrete GPU is installed).
+- **BitTorrent peer connectivity** — documents and publishes **TCP 6881** (incoming peers), the
+  single biggest reliability lever. See [Peer connectivity](#peer-connectivity-bittorrent-port).
+- **Torrent tuning via env** — exposes the engine's `bt*`/cache settings as environment variables,
+  defaulting to upstream values when unset. See [Torrent tuning](#torrent-tuning).
+- **Proxmox/LXC + Pascal notes** — host driver and GPU-passthrough guidance for a
+  Proxmox → LXC → Docker stack (kernel 6.8.x driver caveats included). See
+  [`NVIDIA-GPU.md`](NVIDIA-GPU.md).
+
+**Status:** VAAPI + torrent paths are intended to be verifiable on an Intel iGPU host today; the
+NVENC path and the Proxmox/LXC passthrough steps await hardware bring-up. Roadmap (not yet
+started): newer ffmpeg for GPU-side 10-bit scaling, per-stream dual-GPU routing, and an optional
+libtorrent backend.
 
 ## Features
 
@@ -226,6 +241,58 @@ docker run -d \
   --device /dev/dri:/dev/dri \
   tsaridas/stremio-docker:latest
 ```
+
+### Peer connectivity (BitTorrent port)
+
+The streaming server accepts **incoming** BitTorrent peer connections on **TCP 6881**.
+Allowing inbound peers materially improves reliability: without it you are a
+non-connectable peer and can only reach the connectable half of a swarm, which is the
+most common cause of stalls on sparse (legal/public-domain) torrents.
+
+**TCP vs UDP:** all peer data uses **TCP** (the engine has no uTP), so **TCP 6881 is the one that
+matters**. **UDP 6881** is optional — it only serves DHT peer *discovery*; publishing/forwarding it
+is harmless and can slightly improve discoverability, but it won't fix stalls the way TCP does.
+
+Two layers are required:
+
+1. **Publish the port on the container** (already in `compose-nvidia.yaml`):
+
+   ```yaml
+   ports:
+     - "6881:6881/tcp"
+     - "6881:6881/udp"   # optional (DHT discovery only)
+   ```
+
+2. **Forward it on your router** (WAN → the Docker host's LAN IP), TCP 6881 (UDP optional),
+   e.g. with nftables:
+
+   ```
+   # nftables example on the Linux router (adjust interface/IP)
+   ip daddr <router-wan-ip> tcp dport 6881 dnat to <host-lan-ip>:6881
+   ip daddr <router-wan-ip> udp dport 6881 dnat to <host-lan-ip>:6881   # optional (DHT)
+   ```
+
+> Keep the port identical end-to-end (6881 on both sides). The engine announces its own
+> listen port (6881) to peers; remapping to a different external port leaves you non-connectable.
+
+### Torrent tuning
+
+The streaming server's torrent engine exposes several levers. They are left at the
+server's own defaults unless you set the matching environment variable.
+
+| Env var | server-settings key | Default | Meaning |
+|---|---|---|---|
+| `BT_MAX_CONNECTIONS` | `btMaxConnections` | 55 | Max peer connections |
+| `BT_HANDSHAKE_TIMEOUT` | `btHandshakeTimeout` | 20000 | Handshake timeout (ms) |
+| `BT_REQUEST_TIMEOUT` | `btRequestTimeout` | 4000 | Piece request timeout (ms) |
+| `BT_DOWNLOAD_SPEED_SOFT_LIMIT` | `btDownloadSpeedSoftLimit` | 2621440 | Soft speed cap (bytes/s) |
+| `BT_DOWNLOAD_SPEED_HARD_LIMIT` | `btDownloadSpeedHardLimit` | 3670016 | Hard speed cap (bytes/s) |
+| `BT_MIN_PEERS_FOR_STABLE` | `btMinPeersForStable` | 5 | Peers considered "stable" |
+| `CACHE_SIZE` | `cacheSize` | 2147483648 | On-disk piece cache (bytes) |
+
+> On a fast LAN, raising `BT_DOWNLOAD_SPEED_HARD_LIMIT` (e.g. `10485760` = 10 MiB/s) lets
+> the buffer fill faster. The cache lives under the mounted volume; place that volume on an
+> SSD rather than enlarging `CACHE_SIZE`.
 
 ### Builds
 

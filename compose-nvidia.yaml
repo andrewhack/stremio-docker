@@ -1,24 +1,48 @@
 services:
   stremio:
-    # Local build (default). For a prebuilt image from CI, comment out `build:` and set one of:
-    # image: tsaridas/stremio-docker:nightly-nvidia   # nightly schedule (bleeding edge)
-    # image: tsaridas/stremio-docker:latest-nvidia    # last Docker Hub release only (stable)
+    # Local dual-GPU build (Intel VAAPI + NVIDIA NVENC). Image name is distinct from the
+    # upstream tsaridas image so it never overlaps with it.
     build:
       context: .
       dockerfile: Dockerfile.nvidia
-    image: stremio-docker:nvidia
-    runtime: nvidia
+    image: stremio-docker-dual:latest
+    runtime: nvidia          # REQUIRED for the GPU: injects libcuda/NVENC libs. Env vars alone do nothing.
     restart: unless-stopped
     environment:
       - NO_CORS=1
-      - AUTO_SERVER_URL=0
-      - IPADDRESS=192.168.0.100
-      - SERVER_URL=https://192.168.0.100:8080/
-      - WEBUI_INTERNAL_PORT=8080
+      - AUTO_SERVER_URL=1
+      # HTTPS for a custom domain (recommended; webOS/Tizen reject plain HTTP / self-signed).
+      # Set these to YOUR domain and place the cert as certificates.pem in the data volume
+      # (./stremio-data/certificates.pem). Without them the server serves plain HTTP, and a
+      # browser loading the player over https://<your-domain> cannot reach the streaming server.
+      # - DOMAIN=your.domain.tld
+      # - CERT_FILE=certificates.pem
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      # Optional torrent tuning (unset = stock server defaults):
+      # - BT_DOWNLOAD_SPEED_HARD_LIMIT=10485760
+      # - BT_MAX_CONNECTIONS=120
     ports:
-      - "8085:8080"
+      # Web player + streaming-server API, both via nginx (the normal access path).
+      - "8080:8080"
+      # BitTorrent peer port (incoming connections). server.js listens on TCP 6881.
+      # Keep the same port on both sides; the engine announces its listen port to peers.
+      # Reachability from the internet also requires a WAN->LAN DNAT on the router
+      # (forward WAN tcp/6881 -> <host LAN IP> tcp/6881). Publishing here alone is LAN-only.
+      - "6881:6881/tcp"
+      # UDP is optional: the engine carries peer data over TCP (no uTP); UDP only serves
+      # DHT peer discovery. Harmless to publish, can slightly improve discoverability.
+      - "6881:6881/udp"
+      # Streaming-server endpoints, published directly.
+      # NOTE: inside the container server.js binds these to 127.0.0.1 (HTTP 11470) and
+      # local.strem.io (HTTPS 12470), i.e. loopback only — so these published ports may be
+      # refused from outside. The normal, working access path is nginx on 8080 above; these
+      # are exposed for tooling/optional direct access.
+      - "11470:11470"
+      - "12470:12470"
+    devices:
+      # Intel iGPU for VAAPI. The NVIDIA GPU is provided via `runtime: nvidia` above.
+      - "/dev/dri:/dev/dri"
     volumes:
       - "./stremio-data:/root/.stremio-server"
     deploy:
