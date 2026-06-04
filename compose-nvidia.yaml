@@ -1,23 +1,26 @@
 services:
   stremio:
-    # Local build (default). For a prebuilt image from CI, comment out `build:` and set one of:
-    # image: tsaridas/stremio-docker:nightly-nvidia   # nightly schedule (bleeding edge)
-    # image: tsaridas/stremio-docker:latest-nvidia    # last Docker Hub release only (stable)
+    # Local dual-GPU build (Intel VAAPI + NVIDIA NVENC). Image name is distinct from the
+    # upstream tsaridas image so it never overlaps with it.
     build:
       context: .
       dockerfile: Dockerfile.nvidia
-    image: stremio-docker:nvidia
+    image: stremio-docker-dual:latest
     runtime: nvidia
     restart: unless-stopped
     environment:
       - NO_CORS=1
-      - AUTO_SERVER_URL=0
-      - IPADDRESS=192.168.0.100
-      - SERVER_URL=https://192.168.0.100:8080/
-      - WEBUI_INTERNAL_PORT=8080
+      # Player auto-detects the streaming-server URL from the page origin (e.g. http://<host>:8085).
+      # Do NOT hardcode SERVER_URL to :8080 (that is the container-internal port) and do NOT set
+      # IPADDRESS unless you want the *.stremio.rocks HTTPS cert flow — both caused connection errors.
+      - AUTO_SERVER_URL=1
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      # Optional torrent tuning (unset = stock server defaults):
+      # - BT_DOWNLOAD_SPEED_HARD_LIMIT=10485760
+      # - BT_MAX_CONNECTIONS=120
     ports:
+      # Web player + streaming-server API, both via nginx (the normal access path).
       - "8085:8080"
       # BitTorrent peer port (incoming connections). server.js listens on TCP 6881.
       # Keep the same port on both sides; the engine announces its listen port to peers.
@@ -27,6 +30,13 @@ services:
       # UDP is optional: the engine carries peer data over TCP (no uTP); UDP only serves
       # DHT peer discovery. Harmless to publish, can slightly improve discoverability.
       - "6881:6881/udp"
+      # Streaming-server endpoints, published directly.
+      # NOTE: inside the container server.js binds these to 127.0.0.1 (HTTP 11470) and
+      # local.strem.io (HTTPS 12470), i.e. loopback only — so these published ports may be
+      # refused from outside until/unless the server is made to bind 0.0.0.0. The normal,
+      # working access path is nginx on 8085 above; these are exposed per request/for tooling.
+      - "11470:11470"
+      - "12470:12470"
     devices:
       # Intel iGPU for VAAPI. The NVIDIA GPU is provided via `runtime: nvidia` above.
       - "/dev/dri:/dev/dri"

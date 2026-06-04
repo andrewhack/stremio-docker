@@ -244,7 +244,7 @@ GitHub Actions builds **`Dockerfile.nvidia`** in a separate job **`build-nvidia`
 
 Rationale: one image name (`stremio-docker`), discoverable **`-nvidia`** suffix, no second Docker Hub repository to maintain, and manifest lists can grow to more architectures later without renaming.
 
-Local compose uses `image: stremio-docker:nvidia` when you build yourself; to run a prebuilt hub image instead, use **`nightly-nvidia`** for bleeding edge or **`latest-nvidia`** once you want the last released NVIDIA variant (and remove or keep the `build:` block as you prefer).
+Local compose uses `image: stremio-docker-dual:latest` when you build yourself; to run a prebuilt hub image instead, use **`nightly-nvidia`** for bleeding edge or **`latest-nvidia`** once you want the last released NVIDIA variant (and remove or keep the `build:` block as you prefer).
 
 ### Resolved build issues
 
@@ -316,7 +316,7 @@ docker compose -f compose-nvidia.yaml up -d   # applies without rebuild
 ### Quick checks
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # GPU visible?
 docker exec $CONTAINER nvidia-smi
@@ -333,7 +333,7 @@ docker exec $CONTAINER sh -c 'ldd /usr/bin/ffmpeg | grep "not found"'
 ### Check whether transcoding uses the GPU
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # ffmpeg processes inside the container
 docker exec $CONTAINER ps aux | grep ffmpeg
@@ -518,10 +518,10 @@ sleep 10
 docker logs stremio-docker-stremio-1 2>&1 | grep NVENC
 
 # 6. Confirm GPU visible
-docker exec $(docker ps --filter "ancestor=stremio-docker:nvidia" -q) nvidia-smi
+docker exec $(docker ps --filter "ancestor=stremio-docker-dual:latest" -q) nvidia-smi
 
 # 7. Check settings
-docker exec $(docker ps --filter "ancestor=stremio-docker:nvidia" -q) \
+docker exec $(docker ps --filter "ancestor=stremio-docker-dual:latest" -q) \
   grep -E 'transcodeHardware|transcodeProfile' /root/.stremio-server/server-settings.json
 ```
 
@@ -718,7 +718,7 @@ These offsets are approximate and may change between stremio-web versions:
 ### Useful diagnostic commands
 
 ```bash
-CONTAINER=$(docker ps --filter "ancestor=stremio-docker:nvidia" -q)
+CONTAINER=$(docker ps --filter "ancestor=stremio-docker-dual:latest" -q)
 
 # All ffmpeg processes and their arguments
 docker exec $CONTAINER sh -c 'for pid in $(pgrep ffmpeg); do
