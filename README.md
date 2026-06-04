@@ -51,6 +51,12 @@ unless a transcode is actually required. Roadmap (not yet started): newer ffmpeg
 
 ## Installation
 
+> ⚠️ **The quick-start below uses the upstream prebuilt image (`tsaridas/stremio-docker:latest`)
+> and is currently obsolete for this fork.** This fork is the **dual-GPU (NVIDIA NVENC + Intel
+> VAAPI)** variant, which is **not published to a registry** — you **build it yourself** from
+> `Dockerfile.nvidia`. Use the build + deploy procedure in **[`NVIDIA-GPU.md`](NVIDIA-GPU.md)**
+> (or `compose-nvidia.yaml`); the steps below are kept only as upstream reference.
+
 ### 1. Install Docker
 
 If you haven't installed Docker yet, you can usually install it with:
