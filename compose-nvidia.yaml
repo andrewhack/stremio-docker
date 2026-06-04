@@ -6,14 +6,17 @@ services:
       context: .
       dockerfile: Dockerfile.nvidia
     image: stremio-docker-dual:latest
-    runtime: nvidia
+    runtime: nvidia          # REQUIRED for the GPU: injects libcuda/NVENC libs. Env vars alone do nothing.
     restart: unless-stopped
     environment:
       - NO_CORS=1
-      # Player auto-detects the streaming-server URL from the page origin (e.g. http://<host>:8085).
-      # Do NOT hardcode SERVER_URL to :8080 (that is the container-internal port) and do NOT set
-      # IPADDRESS unless you want the *.stremio.rocks HTTPS cert flow — both caused connection errors.
       - AUTO_SERVER_URL=1
+      # HTTPS for a custom domain (recommended; webOS/Tizen reject plain HTTP / self-signed).
+      # Set these to YOUR domain and place the cert as certificates.pem in the data volume
+      # (./stremio-data/certificates.pem). Without them the server serves plain HTTP, and a
+      # browser loading the player over https://<your-domain> cannot reach the streaming server.
+      # - DOMAIN=your.domain.tld
+      # - CERT_FILE=certificates.pem
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
       # Optional torrent tuning (unset = stock server defaults):
@@ -21,7 +24,7 @@ services:
       # - BT_MAX_CONNECTIONS=120
     ports:
       # Web player + streaming-server API, both via nginx (the normal access path).
-      - "8085:8080"
+      - "8080:8080"
       # BitTorrent peer port (incoming connections). server.js listens on TCP 6881.
       # Keep the same port on both sides; the engine announces its listen port to peers.
       # Reachability from the internet also requires a WAN->LAN DNAT on the router
@@ -33,8 +36,8 @@ services:
       # Streaming-server endpoints, published directly.
       # NOTE: inside the container server.js binds these to 127.0.0.1 (HTTP 11470) and
       # local.strem.io (HTTPS 12470), i.e. loopback only — so these published ports may be
-      # refused from outside until/unless the server is made to bind 0.0.0.0. The normal,
-      # working access path is nginx on 8085 above; these are exposed per request/for tooling.
+      # refused from outside. The normal, working access path is nginx on 8080 above; these
+      # are exposed for tooling/optional direct access.
       - "11470:11470"
       - "12470:12470"
     devices:
