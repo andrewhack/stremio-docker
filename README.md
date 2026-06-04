@@ -21,8 +21,9 @@ What this fork adds on top of upstream:
   the **Intel VAAPI driver**, so one container can use an Intel iGPU *and* an NVIDIA card. It
   **auto-detects** at boot: NVIDIA present → `nvenc-linux` profile; otherwise → `vaapi` (so the
   image is useful before any discrete GPU is installed).
-- **BitTorrent peer connectivity** — documents and publishes **TCP 6881** (incoming peers), the
-  single biggest reliability lever. See [Peer connectivity](#peer-connectivity-bittorrent-port).
+- **Torrent reliability** — the stock engine is **outbound-only** (it doesn't accept inbound
+  peers, so no port-forward helps); reliability comes from connection caps + download tuning.
+  See [Peer connectivity](#peer-connectivity-bittorrent).
 - **Torrent tuning via env** — exposes the engine's `bt*`/cache settings as environment variables,
   defaulting to upstream values when unset. See [Torrent tuning](#torrent-tuning).
 - **Proxmox/LXC + Pascal notes** — host driver and GPU-passthrough guidance for a
@@ -249,38 +250,26 @@ docker run -d \
   tsaridas/stremio-docker:latest
 ```
 
-### Peer connectivity (BitTorrent port)
+### Peer connectivity (BitTorrent)
 
-The streaming server accepts **incoming** BitTorrent peer connections on **TCP 6881**.
-Allowing inbound peers materially improves reliability: without it you are a
-non-connectable peer and can only reach the connectable half of a swarm, which is the
-most common cause of stalls on sparse (legal/public-domain) torrents.
+> **The bundled Stremio streaming server is outbound-only.** Verified at runtime: it opens
+> connections **out** to peers it discovers (DHT / trackers from the magnet) but does **not**
+> listen for **incoming** peer connections — there is no listening socket on 6881 or any BT port
+> (only nginx on 8080 and the server's 11470/12470 HTTP/HTTPS endpoints). **Forwarding a port to
+> the container therefore has no effect** — inbound peers reach a closed port.
 
-**TCP vs UDP:** all peer data uses **TCP** (the engine has no uTP), so **TCP 6881 is the one that
-matters**. **UDP 6881** is optional — it only serves DHT peer *discovery*; publishing/forwarding it
-is harmless and can slightly improve discoverability, but it won't fix stalls the way TCP does.
+Practical consequences:
 
-Two layers are required:
-
-1. **Publish the port on the container** (already in `compose-nvidia.yaml`):
-
-   ```yaml
-   ports:
-     - "6881:6881/tcp"
-     - "6881:6881/udp"   # optional (DHT discovery only)
-   ```
-
-2. **Forward it on your router** (WAN → the Docker host's LAN IP), TCP 6881 (UDP optional),
-   e.g. with nftables:
-
-   ```
-   # nftables example on the Linux router (adjust interface/IP)
-   ip daddr <router-wan-ip> tcp dport 6881 dnat to <host-lan-ip>:6881
-   ip daddr <router-wan-ip> udp dport 6881 dnat to <host-lan-ip>:6881   # optional (DHT)
-   ```
-
-> Keep the port identical end-to-end (6881 on both sides). The engine announces its own
-> listen port (6881) to peers; remapping to a different external port leaves you non-connectable.
+- Downloads work via **outbound** connections to *connectable* peers (no port-forward required).
+  You can't make *yourself* connectable to the other half of a swarm — rarely a limit on
+  well-seeded torrents, occasionally one on sparse torrents.
+- The reliability levers that actually work with the stock engine:
+  - **`BT_MAX_CONNECTIONS`** — more simultaneous outbound peers (see [Torrent tuning](#torrent-tuning)).
+  - **Download caps** — `BT_DOWNLOAD_SPEED_*` (the default 3.5 MB/s hard cap throttles high-bitrate 4K).
+  - **Source / seeder quality** — sparse or poorly-seeded torrents can't be fixed server-side.
+- **True inbound connectability** (accepting incoming peers, UPnP/port-mapping) would require
+  replacing the engine with a **libtorrent-based backend** — a possible future enhancement, not
+  available with the stock server.
 
 ### Torrent tuning
 

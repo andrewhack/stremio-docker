@@ -290,7 +290,6 @@ docker run -d --name stremio --restart unless-stopped \
   --device /dev/dri:/dev/dri \
   -v "$PWD/stremio-data:/root/.stremio-server" \
   -p 8080:8080 \
-  -p 6881:6881/tcp -p 6881:6881/udp \
   -p 11470:11470 -p 12470:12470 \
   stremio-docker-dual:latest
 ```
@@ -300,7 +299,7 @@ Notes:
 - **HTTPS:** set `DOMAIN` to your domain and place your TLS cert at `./stremio-data/certificates.pem`. For plain HTTP on the LAN, drop `DOMAIN`/`CERT_FILE` and reach it at `http://<host>:8080`. For the `*.stremio.rocks` auto-cert flow, use `-e IPADDRESS=<your-ip>` instead (see the main README).
 - **Intel VAAPI:** `--device /dev/dri:/dev/dri` exposes the iGPU.
 - **Optional torrent tuning** (unset = stock defaults): add e.g. `-e BT_DOWNLOAD_SPEED_HARD_LIMIT=52428800 -e BT_DOWNLOAD_SPEED_SOFT_LIMIT=12582912 -e BT_MAX_CONNECTIONS=200`.
-- **6881** is the BitTorrent peer port (forward it WAN→host on your router for inbound peers); **11470/12470** are the streaming-server HTTP/HTTPS endpoints (loopback-bound in-container — see the ports note in `compose-nvidia.yaml`).
+- **No BitTorrent peer port** is published: the stock Stremio engine is **outbound-only** (verified — it never listens on 6881 or any BT port), so forwarding a peer port has no effect. See the "Peer connectivity" section in the README. **11470/12470** are the streaming-server HTTP/HTTPS endpoints (the server listens on all interfaces); the normal access path is nginx on **8080**.
 
 ```bash
 docker logs -f stremio        # view logs

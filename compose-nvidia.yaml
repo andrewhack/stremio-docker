@@ -25,19 +25,11 @@ services:
     ports:
       # Web player + streaming-server API, both via nginx (the normal access path).
       - "8080:8080"
-      # BitTorrent peer port (incoming connections). server.js listens on TCP 6881.
-      # Keep the same port on both sides; the engine announces its listen port to peers.
-      # Reachability from the internet also requires a WAN->LAN DNAT on the router
-      # (forward WAN tcp/6881 -> <host LAN IP> tcp/6881). Publishing here alone is LAN-only.
-      - "6881:6881/tcp"
-      # UDP is optional: the engine carries peer data over TCP (no uTP); UDP only serves
-      # DHT peer discovery. Harmless to publish, can slightly improve discoverability.
-      - "6881:6881/udp"
-      # Streaming-server endpoints, published directly.
-      # NOTE: inside the container server.js binds these to 127.0.0.1 (HTTP 11470) and
-      # local.strem.io (HTTPS 12470), i.e. loopback only — so these published ports may be
-      # refused from outside. The normal, working access path is nginx on 8080 above; these
-      # are exposed for tooling/optional direct access.
+      # No BitTorrent peer port: the stock Stremio engine is outbound-only (verified — nothing
+      # binds 6881; it dials peers outward but never listens), so forwarding 6881 has no effect.
+      # See the "Peer connectivity" section in NVIDIA-GPU.md / README.md.
+      # Streaming-server endpoints (server.js listens on all interfaces). Optional/direct access;
+      # the normal path is via nginx on 8080 above.
       - "11470:11470"
       - "12470:12470"
     devices:
