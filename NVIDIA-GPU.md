@@ -35,15 +35,23 @@ GPU stacks use **`compose-nvidia.yaml`** (`Dockerfile.nvidia`, NVIDIA runtime, G
 11. [Applied fixes (summary)](#applied-fixes-summary)
 12. [Technical reference](#technical-reference)
 13. [CI and registry tags](#ci-and-registry-tags)
-14. [Current environment](#current-environment)
+14. [Reference environment](#reference-environment)
 
 ---
 
 ## Prerequisites on the host
 
-- NVIDIA driver >= 535 (`nvidia-smi` must work)
+For the **NVIDIA (NVENC) path**:
+
+- NVIDIA driver new enough for your kernel **and** for CUDA 12.2 (floor 525.60.13). On
+  **kernel 6.8** use **≥550.90.07** or **≥535.183** — see
+  [Proxmox and LXC GPU passthrough](#proxmox-and-lxc-gpu-passthrough). `nvidia-smi` must work.
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
 - Docker with the `nvidia` runtime configured (`docker info | grep nvidia`)
+
+> The NVIDIA stack is **optional**. The same image also runs **VAAPI-only** (Intel/AMD iGPU) with
+> just `--device /dev/dri` and no NVIDIA driver — the entrypoint auto-detects which to use (see
+> [Runtime patches](#runtime-patches-serverjs)).
 
 ```bash
 # Verify prerequisites
@@ -174,6 +182,9 @@ ls -l /dev/dri                                            # card0 + renderD128 p
 └─────────────────────────────────────────────────────┘
 ```
 
+> The final image also bundles the Intel **iHD VAAPI** driver, so a single image serves both the
+> NVENC path (NVIDIA) and the VAAPI path (Intel/AMD iGPU).
+
 ### Transcoding pipeline (after patches)
 
 ```
@@ -209,6 +220,11 @@ docker compose -f compose-nvidia.yaml build --no-cache
 # Build with a specific stremio-web branch
 docker compose -f compose-nvidia.yaml build --build-arg BRANCH=release
 ```
+
+> **`BRANCH` selects the `Stremio/stremio-web` (player) branch only** — `development` (default)
+> or `release`. It does **not** select *this* repo's branch: the Dockerfile, entrypoint, and
+> compose come from whatever you have **checked out** (the build context). There is no build-arg
+> for the repo version — run `git checkout <branch>` before building.
 
 **Build time:** ~5–10 min (ffmpeg with CUDA is the slowest part).
 
@@ -256,7 +272,7 @@ docker compose -f compose-nvidia.yaml restart
 docker compose -f compose-nvidia.yaml down
 ```
 
-**Access:** `https://stremio.media.lan/` (host port 8085 → container 8080; replace with your own DNS or IP)
+**Access:** `https://<your-host-or-domain>:8085/` (host port 8085 → container 8080; set to match `SERVER_URL` in `compose-nvidia.yaml`).
 
 ## Resource limits
 
@@ -270,11 +286,13 @@ deploy:
       memory: 256M        # Guaranteed minimum (idle ~200MB: node + nginx)
       devices:
         - driver: nvidia
-          count: 1         # 1 GPU (GTX 1070 8GB)
+          count: 1         # 1 GPU
           capabilities: [gpu, video, compute]
 ```
 
-### Measured usage during active transcoding
+### Measured usage during active transcoding (reference figures)
+
+> Measured on a reference Pascal GTX 1070 setup; your numbers vary with card, resolution, and concurrency.
 
 | Process | CPU | RAM (RSS) | GPU |
 |----------|-----|-----------|-----|
@@ -354,6 +372,9 @@ Stremio stores transcoding settings in `/root/.stremio-server/server-settings.js
 
 > **Note:** The GPU is only used when transcoding happens (e.g. HEVC→H264, resolution change).
 > If the player supports the codec natively, the stream goes straight through without ffmpeg.
+>
+> On a host without an NVIDIA GPU the same fields apply but `transcodeProfile` is `"vaapi"`
+> (and `allTranscodeProfiles` is `["vaapi"]`), set automatically by the autodetect above.
 
 ## Runtime patches (server.js)
 
@@ -362,6 +383,18 @@ The `stremio-web-service-run.sh` file (container entrypoint) patches Stremio's `
 webpack bundle and we cannot change Stremio's source directly.
 
 Patches are re-applied automatically on every container restart/recreate.
+
+### Hardware autodetect (NVENC vs VAAPI)
+
+The entrypoint picks the transcode profile by what is present at boot:
+
+- **`nvidia-smi` present** → applies the NVENC patches below and sets `transcodeProfile: "nvenc-linux"`.
+- **no `nvidia-smi`** → neutralizes the same auto-test and sets `transcodeProfile: "vaapi"` (Intel/AMD).
+
+So the same image is correct whether or not an NVIDIA card is installed; on a VAAPI-only host you
+just pass `--device /dev/dri` and skip the NVIDIA runtime. The entrypoint additionally injects
+optional torrent/cache tuning (`BT_*` / `CACHE_SIZE` env → `server-settings.json`) — see the
+README "Torrent tuning" section.
 
 ### Patch 1: Neutralize the hardware-acceleration auto-test
 
@@ -709,32 +742,15 @@ curl -s http://localhost:11470/settings 2>/dev/null | python3 -m json.tool | gre
 watch -n1 "docker exec $CONTAINER nvidia-smi --query-gpu=utilization.gpu,utilization.encoder,utilization.decoder,memory.used --format=csv,noheader"
 ```
 
-## Current environment
+## Reference environment
 
-- **Host:** Linux, 4 CPUs, 15GB RAM
-- **GPU:** NVIDIA GeForce GTX 1070 (8GB VRAM, Pascal, compute 6.1)
-- **Driver:** 535.288.01 / CUDA 12.2
-- **Docker runtime:** nvidia (nvidia-container-toolkit)
-- **Volume:** `/mnt/lvm1-storage/.stremio-server`
-- **Access:** `https://stremio.media.lan/` (port 8085; example URL — match `SERVER_URL` in `compose-nvidia.yaml`)
-- **Git branch:** `test/gpu-nvidia`
+The NVENC path in this guide was validated on a **Pascal GTX 1070** (8 GB, compute 6.1) using the
+`nvidia` Docker runtime (nvidia-container-toolkit) with CUDA 12.2. The same approach applies to
+other Pascal cards (e.g. the Quadro P400) — see the note at the top of this document for the
+10-bit and low-VRAM caveats.
 
-### Current container limits
-
-| Resource | Limit | Reservation | Rationale |
-|---------|--------|-------------|-----------|
-| CPU | 1.5 cores | — | NVENC offload (measured peak: 138%) |
-| RAM | 1536 MB | 256 MB | Measured peak: 1.35 GB |
-| GPU | 1× GTX 1070 | — | Decode + encode |
-
-### Commits (branch test/gpu-nvidia)
-
-```
-44f6233 perf: reduce container limits — NVENC offloads to GPU
-f869494 docs: update NVIDIA-GPU.md with 10-bit compat and auto-patch info
-2ba78fd fix: patch nvenc-linux profile for 10-bit compat (Pascal GPUs)
-a8d74c5 fix: neutralize hw accel auto-test by patching saveSettings calls
-b6db603 fix: patch server.js to skip broken hw accel auto-test
-2ecfd3e fix: extend NVENC watcher to 360s (auto-test takes ~2min)
-e321aca feat: NVIDIA GPU hardware acceleration (NVENC/NVDEC/CUVID)
-```
+- **GPU:** any NVENC-capable card; Pascal needs the CPU-scale path for 10-bit input (see Patch 2).
+- **Driver:** see [Prerequisites](#prerequisites-on-the-host) — on kernel 6.8 use ≥550.90.07 / ≥535.183.
+- **Container limits:** see [Resource limits](#resource-limits) (1.5 CPU / 1.5 GB are sane defaults;
+  tune for your card and concurrency).
+- **Volume / access:** set the data volume and `SERVER_URL` in `compose-nvidia.yaml` to your host.
