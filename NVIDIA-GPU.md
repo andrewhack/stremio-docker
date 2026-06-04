@@ -272,7 +272,41 @@ docker compose -f compose-nvidia.yaml restart
 docker compose -f compose-nvidia.yaml down
 ```
 
-**Access:** `https://<your-host-or-domain>:8085/` (host port 8085 → container 8080; set to match `SERVER_URL` in `compose-nvidia.yaml`).
+**Access:** `https://<your-host-or-domain>:8080/` (host port 8080 → container 8080).
+
+### Deploy with `docker run` (no compose)
+
+Equivalent to the compose file, for hosts that don't use compose. **`--gpus all` (or `--runtime=nvidia`) is mandatory** — the `NVIDIA_*` env vars alone do nothing without it (the GPU/CUDA libraries are injected by the runtime).
+
+```bash
+docker run -d --name stremio --restart unless-stopped \
+  --gpus all \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -e NO_CORS=1 \
+  -e AUTO_SERVER_URL=1 \
+  -e DOMAIN=your.domain.tld \
+  -e CERT_FILE=certificates.pem \
+  --device /dev/dri:/dev/dri \
+  -v "$PWD/stremio-data:/root/.stremio-server" \
+  -p 8080:8080 \
+  -p 6881:6881/tcp -p 6881:6881/udp \
+  -p 11470:11470 -p 12470:12470 \
+  stremio-docker-dual:latest
+```
+
+Notes:
+- **GPU:** `--gpus all` requires the NVIDIA Container Toolkit on the host. Omit it (and the `NVIDIA_*` env) for a VAAPI-only / CPU host; the entrypoint then auto-selects VAAPI.
+- **HTTPS:** set `DOMAIN` to your domain and place your TLS cert at `./stremio-data/certificates.pem`. For plain HTTP on the LAN, drop `DOMAIN`/`CERT_FILE` and reach it at `http://<host>:8080`. For the `*.stremio.rocks` auto-cert flow, use `-e IPADDRESS=<your-ip>` instead (see the main README).
+- **Intel VAAPI:** `--device /dev/dri:/dev/dri` exposes the iGPU.
+- **Optional torrent tuning** (unset = stock defaults): add e.g. `-e BT_DOWNLOAD_SPEED_HARD_LIMIT=52428800 -e BT_DOWNLOAD_SPEED_SOFT_LIMIT=12582912 -e BT_MAX_CONNECTIONS=200`.
+- **6881** is the BitTorrent peer port (forward it WAN→host on your router for inbound peers); **11470/12470** are the streaming-server HTTP/HTTPS endpoints (loopback-bound in-container — see the ports note in `compose-nvidia.yaml`).
+
+```bash
+docker logs -f stremio        # view logs
+docker restart stremio        # re-applies the server.js patches automatically
+docker rm -f stremio          # stop & remove
+```
 
 ## Resource limits
 
