@@ -35,6 +35,12 @@ HEVC-capable clients (modern TVs) most content **direct-plays** — the GPU is i
 unless a transcode is actually required. Roadmap (not yet started): newer ffmpeg for GPU-side
 10-bit scaling, per-stream dual-GPU routing, and an optional libtorrent backend.
 
+> **Companion project:** an open, Stremio-compatible streaming server (libtorrent engine + the
+> transcode pipeline) that replaces the closed `server.js` is being built in
+> **[andrewhack/stremio-libtorrent-server](https://github.com/andrewhack/stremio-libtorrent-server)**.
+> It uses this image (`stremio-docker-dual`) as its base; this repo provides the ffmpeg/nginx/player
+> toolchain, that one provides the replacement server. (Early development.)
+
 ## Features
 
 - **All-in-One:** Bundles Stremio server, web player, and ffmpeg in a single container.
