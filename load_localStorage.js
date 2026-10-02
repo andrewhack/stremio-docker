@@ -1,4 +1,8 @@
-let isRunning = false; 
+// Replaced downstream: andrewhack/stremio-libtorrent-server installs its own loader over this file's
+// built output (its docker/web-player-loader.js, since 1.6.23). This one re-applies the seeded server
+// URL every 5 s and reloads the page, so a URL picked in Settings cannot stick. Port that loader here
+// when this image is next rebuilt; the downstream install then becomes a no-op to remove.
+let isRunning = false;
 let cachedData = {};
 let items = {};
 let server_url = null;
